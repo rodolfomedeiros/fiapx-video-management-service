@@ -1,4 +1,5 @@
 """API de upload, consulta e acompanhamento em tempo real de vídeos."""
+import asyncio
 import logging
 import os
 import uuid
@@ -9,7 +10,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, We
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import config, events, security, storage
+from app import cache, config, events, metrics, security, storage
 from app.db import engine, session, session_factory
 from app.hub import Hub
 from app.messaging import Broker
@@ -22,7 +23,7 @@ broker = Broker()
 
 
 async def apply_status_change(payload: dict[str, Any]) -> None:
-    """Persiste a transição publicada pelo worker e reflete no WebSocket do dono do vídeo."""
+    """Persiste a transição publicada pelo worker e avisa o dono do vídeo."""
     video_id, new_status = payload.get("video_id"), payload.get("status")
     if not video_id or new_status not in VideoStatus.__members__:
         logger.warning("evento de status ignorado: video_id=%r status=%r", video_id, new_status)
@@ -37,20 +38,44 @@ async def apply_status_change(payload: dict[str, Any]) -> None:
         video.error_message = payload.get("error_message")
         await active.commit()
         logger.info("vídeo %s agora está %s", video.id, video.status.value)
-        await hub.broadcast(str(video.user_id), video.serialize())
+        metrics.status_transitions.labels(video.status.value).inc()
+        user_id, update = str(video.user_id), video.serialize()
+
+    # Só uma réplica consome o evento da fila, mas o usuário pode estar conectado a
+    # qualquer outra: o Redis reparte a atualização entre todas. Sem ele, o alcance
+    # fica limitado aos sockets locais.
+    if not await cache.publish_update(user_id, update):
+        await hub.broadcast(user_id, update)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await broker.connect()
     await broker.consume_status_changes(apply_status_change)
+    fanout = asyncio.create_task(_relay_updates())
     yield
+    fanout.cancel()
     await broker.close()
     await security.close()
+    await cache.close()
     await engine.dispose()
 
 
+async def _relay_updates() -> None:
+    """Entrega aos sockets desta réplica o que qualquer réplica publicou."""
+    while True:
+        try:
+            await cache.subscribe_updates(hub.broadcast)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("assinatura do canal de atualizações caiu, refazendo em 3s", exc_info=True)
+            await asyncio.sleep(3)
+
+
 app = FastAPI(title="FIAP X Video Management Service", version="1.0.0", lifespan=lifespan)
+app.middleware("http")(metrics.measure_requests)
+app.mount("/metrics", metrics.app)
 
 
 @app.get("/health", include_in_schema=False)
@@ -75,7 +100,8 @@ async def upload_video(
     extension = os.path.splitext(file.filename or "")[1].lower()
     if extension not in config.ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Formato de arquivo não suportado")
-    if _upload_size(file) > config.MAX_UPLOAD_BYTES:
+    size = _upload_size(file)
+    if size > config.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Arquivo excede o limite permitido")
 
     video_id = uuid.uuid4()
@@ -92,6 +118,8 @@ async def upload_video(
     db.add(video)
     await db.commit()
     await broker.publish(config.RECEIVED_ROUTING_KEY, events.video_received(video, user_email=user.get("email")))
+    metrics.uploads.inc()
+    metrics.upload_bytes.observe(size)
     return {"id": str(video.id), "status": video.status.value}
 
 

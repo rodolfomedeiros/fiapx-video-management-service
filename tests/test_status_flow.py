@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from app import main
+from app import cache, main
 from app.models import VideoStatus
 from tests.conftest import USER_ID, insert_video, session_maker
 
@@ -20,7 +20,34 @@ class FakeSocket:
 
 
 @pytest.fixture
-def consumidor(monkeypatch):
+def publicadas(monkeypatch):
+    """Atualizações que teriam ido ao canal do Redis."""
+    enviadas: list[tuple[str, dict]] = []
+
+    async def fake_publish(user_id, payload):
+        enviadas.append((user_id, payload))
+        return True
+
+    monkeypatch.setattr(cache, "publish_update", fake_publish)
+    return enviadas
+
+
+@pytest.fixture
+def consumidor(monkeypatch, publicadas):
+    monkeypatch.setattr(main, "session_factory", session_maker)
+    main.hub.connections.clear()
+    yield main.apply_status_change
+    main.hub.connections.clear()
+
+
+@pytest.fixture
+def consumidor_sem_redis(monkeypatch):
+    """Redis fora: a atualização deve cair no broadcast local."""
+
+    async def fake_publish(user_id, payload):
+        return False
+
+    monkeypatch.setattr(cache, "publish_update", fake_publish)
     monkeypatch.setattr(main, "session_factory", session_maker)
     main.hub.connections.clear()
     yield main.apply_status_change
@@ -39,10 +66,8 @@ async def _read(video_id):
 
 
 @pytest.mark.asyncio
-async def test_conclusao_grava_zip_e_notifica_o_dono(consumidor):
+async def test_conclusao_grava_zip_e_avisa_o_dono_em_todas_as_replicas(consumidor, publicadas):
     video = insert_video(status=VideoStatus.PROCESSING)
-    socket = FakeSocket()
-    await main.hub.connect(str(USER_ID), socket)
 
     await consumidor(
         {"video_id": str(video.id), "status": "COMPLETED", "zip_file_path": "processed/ana/pronto.zip"}
@@ -50,6 +75,23 @@ async def test_conclusao_grava_zip_e_notifica_o_dono(consumidor):
 
     status, zip_path, erro = await _read(video.id)
     assert (status, zip_path, erro) == ("COMPLETED", "processed/ana/pronto.zip", None)
+
+    dono, atualizacao = publicadas[0]
+    assert dono == str(USER_ID)
+    assert atualizacao["status"] == "COMPLETED"
+    assert atualizacao["zip_file_path"] == "processed/ana/pronto.zip"
+
+
+@pytest.mark.asyncio
+async def test_com_redis_fora_a_atualizacao_ainda_chega_aos_sockets_locais(consumidor_sem_redis):
+    video = insert_video(status=VideoStatus.PROCESSING)
+    socket = FakeSocket()
+    await main.hub.connect(str(USER_ID), socket)
+
+    await consumidor_sem_redis(
+        {"video_id": str(video.id), "status": "COMPLETED", "zip_file_path": "processed/ana/pronto.zip"}
+    )
+
     assert socket.recebidos[0]["status"] == "COMPLETED"
     assert socket.recebidos[0]["zip_file_path"] == "processed/ana/pronto.zip"
 

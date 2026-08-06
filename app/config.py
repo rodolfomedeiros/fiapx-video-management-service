@@ -9,6 +9,12 @@ S3_PUBLIC_ENDPOINT_URL = os.getenv("S3_PUBLIC_ENDPOINT_URL", S3_ENDPOINT_URL)
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "fiapx")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "fiapx-minio-password")
 S3_BUCKET = os.getenv("S3_BUCKET", "videos")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# Janela em que um token revogado ainda passa. Curta o bastante para não virar
+# problema, longa o bastante para tirar a introspecção do caminho crítico.
+TOKEN_CACHE_TTL_SECONDS = int(os.getenv("TOKEN_CACHE_TTL_SECONDS", "60"))
+UPDATES_CHANNEL = "video.updates"
 
 EXCHANGE = "video.events"
 STATUS_QUEUE = "video-status-queue"

@@ -1,9 +1,11 @@
-"""Validação do Bearer token por introspecção no auth-service."""
-import httpx
-from fastapi import Header, HTTPException
+"""Validação do Bearer token por introspecção no auth-service, com cache no Redis."""
+import hashlib
 from typing import Any
 
-from app import config
+import httpx
+from fastapi import Header, HTTPException
+
+from app import cache, config
 
 _client: httpx.AsyncClient | None = None
 
@@ -26,6 +28,12 @@ async def close() -> None:
 async def authenticate(authorization: str | None) -> dict[str, Any]:
     if not authorization:
         raise HTTPException(status_code=401, detail="Bearer token obrigatório")
+    # O token nunca vai para o Redis: a chave é o digest, para que ler o cache não
+    # entregue credenciais utilizáveis.
+    digest = hashlib.sha256(authorization.encode()).hexdigest()
+    cached = await cache.get_claims(digest)
+    if cached is not None:
+        return cached
     try:
         response = await client().post(config.AUTH_INTROSPECTION_URL, headers={"Authorization": authorization})
     except httpx.HTTPError as error:
@@ -35,6 +43,7 @@ async def authenticate(authorization: str | None) -> dict[str, Any]:
     data = response.json()
     if not data.get("active") or not data.get("sub"):
         raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+    await cache.put_claims(digest, data)
     return data
 
 
