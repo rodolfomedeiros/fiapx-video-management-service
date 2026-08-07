@@ -15,6 +15,7 @@ atualizações em tempo real para o navegador.
 | **fiapx-video-management-service** *(você está aqui)* | Python 3.13 · FastAPI | Upload, listagem, download e WebSocket de tempo real |
 | [fiapx-video-processor-worker](https://github.com/rodolfomedeiros/fiapx-video-processor-worker) | Rust 1.94 · Tokio | Extração de quadros com FFmpeg e compactação em `.zip` |
 | [fiapx-notification-service](https://github.com/rodolfomedeiros/fiapx-notification-service) | Go 1.25 | Consumo da DLQ e envio de e-mail de falha |
+| [fiapx-web](https://github.com/rodolfomedeiros/fiapx-web) | React 19 · TypeScript 6 | Interface de upload, acompanhamento e download |
 
 > Para subir o sistema inteiro, use o **fiapx-platform**. Este repositório sozinho precisa
 > de PostgreSQL, RabbitMQ, Redis e MinIO acessíveis.
