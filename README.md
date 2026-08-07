@@ -198,9 +198,13 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-54 testes cobrindo rotas, introspecção e seu cache, hub de WebSocket, consumo de transições
-de estado, métricas e conformidade dos eventos com o contrato. A suíte roda sobre SQLite
-temporário, sem depender de PostgreSQL, RabbitMQ, Redis ou MinIO.
+73 testes cobrindo rotas, introspecção e seu cache, hub e endpoint de WebSocket, consumo de
+transições de estado, publicação no broker, acesso ao object storage, métricas e conformidade
+dos eventos com o contrato. A suíte roda sobre SQLite temporário, com dublês no lugar do
+RabbitMQ, do Redis e do MinIO — nada de rede.
+
+`pytest` trava abaixo de **80% de cobertura**, como o JaCoCo faz no auth-service. Hoje a
+suíte entrega 86%; o relatório por arquivo sai no terminal a cada execução.
 
 ## Contrato de eventos
 
