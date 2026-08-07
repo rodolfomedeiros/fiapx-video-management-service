@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+from functools import partial
 from typing import Any, Awaitable, Callable
 
 import aio_pika
@@ -11,6 +12,31 @@ from app import config
 logger = logging.getLogger(__name__)
 
 Handler = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+async def dispatch(message: aio_pika.abc.AbstractIncomingMessage, handler: Handler) -> None:
+    """Decide o destino de uma mensagem de status.
+
+    Evento ilegível vai direto para a DLQ: retentar não vai torná-lo válido. Falha do
+    handler — Postgres fora do ar, por exemplo — é retentada uma única vez, porque
+    insistir em uma mensagem já reentregue transformaria a fila em um laço quente.
+    Esgotada a tentativa, a mensagem para em `video-status-dlq` em vez de sumir: sem
+    isso, uma indisponibilidade momentânea do banco deixava o vídeo travado no status
+    anterior para sempre.
+    """
+    try:
+        payload = json.loads(message.body)
+    except json.JSONDecodeError:
+        logger.error("evento de status ilegível, mandando para a DLQ: %r", message.body[:200])
+        await message.reject(requeue=False)
+        return
+    try:
+        await handler(payload)
+    except Exception:
+        logger.exception("falha ao aplicar o evento de status, reentrega=%s", message.redelivered)
+        await message.reject(requeue=not message.redelivered)
+        return
+    await message.ack()
 
 
 class Broker:
@@ -69,19 +95,11 @@ class Broker:
         channel = await self._connection.channel()
         await channel.set_qos(prefetch_count=16)
         exchange = await channel.declare_exchange(config.EXCHANGE, aio_pika.ExchangeType.TOPIC, durable=True)
-        queue = await channel.declare_queue(config.STATUS_QUEUE, durable=True)
+        queue = await channel.declare_queue(
+            config.STATUS_QUEUE, durable=True, arguments=config.STATUS_QUEUE_ARGUMENTS
+        )
         await queue.bind(exchange, config.STATUS_ROUTING_KEY)
-
-        async def on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
-            async with message.process(requeue=False):
-                try:
-                    payload = json.loads(message.body)
-                except json.JSONDecodeError:
-                    logger.error("evento de status ilegível, descartando: %r", message.body[:200])
-                    return
-                await handler(payload)
-
-        await queue.consume(on_message)
+        await queue.consume(partial(dispatch, handler=handler))
 
     async def close(self) -> None:
         if self._connection is not None:

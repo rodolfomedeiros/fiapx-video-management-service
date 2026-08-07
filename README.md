@@ -210,3 +210,10 @@ temporário, sem depender de PostgreSQL, RabbitMQ, Redis ou MinIO.
 plataforma está presente no checkout, confere se as duas cópias continuam idênticas.
 
 Este serviço **publica** `video.received` e **consome** `video.status.changed`.
+
+Uma mensagem de status ilegível vai direto para a DLQ — retentar não vai torná-la válida.
+Já a falha ao gravar a transição, tipicamente o Postgres indisponível, é retentada uma
+única vez; insistir em uma mensagem já reentregue transformaria a fila em um laço quente.
+Persistindo a falha, a mensagem para em `video-status-dlq`, de onde pode ser reprocessada.
+O que ela nunca faz é sumir: descartá-la deixaria o vídeo travado no status anterior para
+sempre, sem nada indicando que houve perda.

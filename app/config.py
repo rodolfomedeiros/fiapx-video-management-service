@@ -19,7 +19,15 @@ UPDATES_CHANNEL = "video.updates"
 EXCHANGE = "video.events"
 STATUS_QUEUE = "video-status-queue"
 STATUS_ROUTING_KEY = "video.status.changed"
+STATUS_DEAD_LETTER_ROUTING_KEY = "video.status.dead"
 RECEIVED_ROUTING_KEY = "video.received"
+
+# Espelha `fiapx-platform/rabbitmq/definitions.json`. Divergir daqui faz o broker
+# responder PRECONDITION_FAILED e derruba o serviço no boot.
+STATUS_QUEUE_ARGUMENTS = {
+    "x-dead-letter-exchange": EXCHANGE,
+    "x-dead-letter-routing-key": STATUS_DEAD_LETTER_ROUTING_KEY,
+}
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
